@@ -1,38 +1,34 @@
 package model
 
-type TempState int
-type RainState int
+import "math"
 
-const (
-	TempCold TempState = iota
-	TempMild
-	TempHot
-)
+type WeatherState struct {
+	MinTemp int
+	MaxTemp int
+	Rain    int
+}
 
-const (
-	RainDry RainState = iota
-	RainLight
-	RainHeavy
-)
+const BucketSize = 2
 
-func BucketTemp(t float64) TempState {
-	switch {
-	case t < 5:
-		return TempCold
-	case t < 25:
-		return TempMild
-	default:
-		return TempHot
+func ToState(min, max, rainSum float64) WeatherState {
+	return WeatherState{
+		MinTemp: roundToBucket(min),
+		MaxTemp: roundToBucket(max),
+		Rain:    bucketRain(rainSum),
 	}
 }
 
-func BucketRain(r float64) RainState {
+func roundToBucket(val float64) int {
+	return int(math.Round(val/float64(BucketSize)) * BucketSize)
+}
+
+func bucketRain(r float64) int {
 	switch {
-	case r == 0:
-		return RainDry
-	case r < 10:
-		return RainLight
+	case r < 0.1:
+		return 0
+	case r < 5.0:
+		return 1
 	default:
-		return RainHeavy
+		return 2
 	}
 }

@@ -15,8 +15,9 @@ type Handler struct {
 func (h *Handler) Forecast(w http.ResponseWriter, r *http.Request) {
 	lat, _ := strconv.ParseFloat(r.URL.Query().Get("lat"), 64)
 	lon, _ := strconv.ParseFloat(r.URL.Query().Get("lon"), 64)
+	days, _ := strconv.ParseInt(r.URL.Query().Get("days"), 10, 64)
 
-	result, err := h.Service.Forecast(lat, lon)
+	result, err := h.Service.Forecast(lat, lon, int(days))
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

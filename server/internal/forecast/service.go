@@ -2,6 +2,7 @@ package forecast
 
 import (
 	"errors"
+	"math"
 
 	"github.com/rodrigocitadin/monte-markov-weather-simulation/internal/markov"
 	"github.com/rodrigocitadin/monte-markov-weather-simulation/internal/model"
@@ -15,145 +16,82 @@ type DayPrediction struct {
 	Day      int     `json:"day"`
 	MinTemp  float64 `json:"min"`
 	MaxTemp  float64 `json:"max"`
-	RainProb float64 `json:"chuva"`
+	RainProb float64 `json:"rain_prob"`
+	RainInt  int     `json:"rain_intensity"`
 }
 
-type TempStats struct {
-	Sum   float64
-	Count int
-}
-
-type FinalPrediction struct {
-	MinTemp  float64 `json:"min"`
-	MaxTemp  float64 `json:"max"`
-	RainProb float64 `json:"chuva"`
-}
-
-func (s *Service) Forecast(lat, lon float64) ([]DayPrediction, error) {
+func (s *Service) Forecast(lat, lon float64, daysToPredict int) ([]DayPrediction, error) {
 	resp, err := weatherapi.Fetch(lat, lon)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(resp.Daily.Time) < 3 {
-		return nil, errors.New("not enough data")
+	if len(resp.Daily.Time) < 1 {
+		return nil, errors.New("insufficient data")
 	}
 
-	var minStates []model.TempState
-	var maxStates []model.TempState
-	var rainStates []model.RainState
-
-	minStats := make(map[model.TempState]*TempStats)
-	maxStats := make(map[model.TempState]*TempStats)
-
+	var realHistory []model.WeatherState
 	for i := range resp.Daily.Time {
-		minTemp := resp.Daily.TempMin[i]
-		maxTemp := resp.Daily.TempMax[i]
-		rain := resp.Daily.RainSum[i]
-
-		minState := model.BucketTemp(minTemp)
-		maxState := model.BucketTemp(maxTemp)
-		rainState := model.BucketRain(rain)
-
-		minStates = append(minStates, minState)
-		maxStates = append(maxStates, maxState)
-		rainStates = append(rainStates, rainState)
-
-		if minStats[minState] == nil {
-			minStats[minState] = &TempStats{}
-		}
-		minStats[minState].Sum += minTemp
-		minStats[minState].Count++
-
-		if maxStats[maxState] == nil {
-			maxStats[maxState] = &TempStats{}
-		}
-		maxStats[maxState].Sum += maxTemp
-		maxStats[maxState].Count++
+		state := model.ToState(
+			resp.Daily.TempMin[i],
+			resp.Daily.TempMax[i],
+			resp.Daily.RainSum[i],
+		)
+		realHistory = append(realHistory, state)
 	}
 
-	minChain := markov.NewChain[model.TempState]()
-	maxChain := markov.NewChain[model.TempState]()
-	rainChain := markov.NewChain[model.RainState]()
+	chain := markov.NewChain[model.WeatherState]()
 
-	minChain.Train(minStates)
-	maxChain.Train(maxStates)
-	rainChain.Train(rainStates)
+	syntheticData := GenerateSyntheticData(5000)
+	chain.Train(syntheticData)
 
-	runs := 20000
-	days := 3
+	for range 20 {
+		chain.Train(realHistory)
+	}
 
-	minDist := montecarlo.SimulateMultiStep(
-		minStates[len(minStates)-1],
-		days,
-		runs,
-		minChain.Next,
-	)
+	lastState := realHistory[len(realHistory)-1]
+	simulationRuns := 10000
 
-	maxDist := montecarlo.SimulateMultiStep(
-		maxStates[len(maxStates)-1],
-		days,
-		runs,
-		maxChain.Next,
-	)
-
-	rainDist := montecarlo.SimulateMultiStep(
-		rainStates[len(rainStates)-1],
-		days,
-		runs,
-		rainChain.Next,
+	distributions := montecarlo.SimulateMultiStep(
+		lastState,
+		daysToPredict,
+		simulationRuns,
+		chain.Next,
 	)
 
 	var predictions []DayPrediction
-
-	for d := 0; d < 3; d++ {
-		predictions = append(predictions, DayPrediction{
-			Day:      d + 1,
-			MinTemp:  expectedTemp(minDist[d], minStats),
-			MaxTemp:  expectedTemp(maxDist[d], maxStats),
-			RainProb: expectedRain(rainDist[d]),
-		})
+	for d, dist := range distributions {
+		pred := calculateExpectedValues(dist)
+		pred.Day = d + 1
+		predictions = append(predictions, pred)
 	}
 
 	return predictions, nil
 }
 
-func expectedTemp(
-	dist map[model.TempState]float64,
-	stats map[model.TempState]*TempStats,
-) float64 {
-	total := 0.0
+func calculateExpectedValues(dist map[model.WeatherState]float64) DayPrediction {
+	var sumMin, sumMax, probRain float64
+	var maxProb float64
+	var mostLikelyRain int
 
 	for state, prob := range dist {
-		s := stats[state]
-		if s == nil || s.Count == 0 {
-			continue
-		}
-		mean := s.Sum / float64(s.Count)
-		total += mean * prob
-	}
+		sumMin += float64(state.MinTemp) * prob
+		sumMax += float64(state.MaxTemp) * prob
 
-	return total
-}
-
-func expectedRain(dist map[model.RainState]float64) float64 {
-	total := 0.0
-
-	for state, prob := range dist {
-
-		var rainVal float64
-
-		switch state {
-		case model.RainDry:
-			rainVal = 0.0
-		case model.RainLight:
-			rainVal = 0.4
-		case model.RainHeavy:
-			rainVal = 0.9
+		if state.Rain > 0 {
+			probRain += prob
 		}
 
-		total += rainVal * prob
+		if prob > maxProb {
+			maxProb = prob
+			mostLikelyRain = state.Rain
+		}
 	}
 
-	return total
+	return DayPrediction{
+		MinTemp:  math.Round(sumMin*10) / 10,
+		MaxTemp:  math.Round(sumMax*10) / 10,
+		RainProb: math.Round(probRain*100) / 100,
+		RainInt:  mostLikelyRain,
+	}
 }
