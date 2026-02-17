@@ -12,13 +12,13 @@ const BucketSize = 2
 
 func ToState(min, max, rainSum float64) WeatherState {
 	return WeatherState{
-		MinTemp: roundToBucket(min),
-		MaxTemp: roundToBucket(max),
+		MinTemp: RoundToBucket(min),
+		MaxTemp: RoundToBucket(max),
 		Rain:    bucketRain(rainSum),
 	}
 }
 
-func roundToBucket(val float64) int {
+func RoundToBucket(val float64) int {
 	return int(math.Round(val/float64(BucketSize)) * BucketSize)
 }
 
