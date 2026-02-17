@@ -11,6 +11,13 @@ import (
 
 type Service struct{}
 
+type DayPrediction struct {
+	Day      int     `json:"day"`
+	MinTemp  float64 `json:"min"`
+	MaxTemp  float64 `json:"max"`
+	RainProb float64 `json:"chuva"`
+}
+
 type TempStats struct {
 	Sum   float64
 	Count int
@@ -22,7 +29,7 @@ type FinalPrediction struct {
 	RainProb float64 `json:"chuva"`
 }
 
-func (s *Service) Forecast(lat, lon float64) (*FinalPrediction, error) {
+func (s *Service) Forecast(lat, lon float64) ([]DayPrediction, error) {
 	resp, err := weatherapi.Fetch(lat, lon)
 	if err != nil {
 		return nil, err
@@ -76,32 +83,39 @@ func (s *Service) Forecast(lat, lon float64) (*FinalPrediction, error) {
 	runs := 20000
 	days := 3
 
-	minDist := montecarlo.Simulate(
+	minDist := montecarlo.SimulateMultiStep(
 		minStates[len(minStates)-1],
 		days,
 		runs,
 		minChain.Next,
 	)
 
-	maxDist := montecarlo.Simulate(
+	maxDist := montecarlo.SimulateMultiStep(
 		maxStates[len(maxStates)-1],
 		days,
 		runs,
 		maxChain.Next,
 	)
 
-	rainDist := montecarlo.Simulate(
+	rainDist := montecarlo.SimulateMultiStep(
 		rainStates[len(rainStates)-1],
 		days,
 		runs,
 		rainChain.Next,
 	)
 
-	return &FinalPrediction{
-		MinTemp:  expectedTemp(minDist, minStats),
-		MaxTemp:  expectedTemp(maxDist, maxStats),
-		RainProb: expectedRain(rainDist),
-	}, nil
+	var predictions []DayPrediction
+
+	for d := 0; d < 3; d++ {
+		predictions = append(predictions, DayPrediction{
+			Day:      d + 1,
+			MinTemp:  expectedTemp(minDist[d], minStats),
+			MaxTemp:  expectedTemp(maxDist[d], maxStats),
+			RainProb: expectedRain(rainDist[d]),
+		})
+	}
+
+	return predictions, nil
 }
 
 func expectedTemp(
